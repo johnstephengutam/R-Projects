@@ -1,0 +1,88 @@
+library(rjson)
+library(jsonlite)
+library(socket)
+library(matplotlib.pyplot)
+library(multiprocess)
+library(dplyr)
+
+# Opening JSON file
+data <- fromJSON(file='C://response.json')
+un_flat_json <- jsonlite::read_json(data, simplifyVector = T)
+
+# Flattened json file
+flat_json <- flatten(un_flat_json)
+# print("FLAT_JSON : ", flat_json)
+
+# Convert dict to dataframe
+df <- as.data.frame(flat_json)
+
+# Creating CSVFile with values
+CSVFile <- data.frame(Notices = df$key, Infringing_urls = df$value)
+write.csv(CSVFile, "CSVFile.csv", quote = F)
+
+#Count variable to keep a limit on the number of data to be processed
+count <- 0
+CSV_Domain_IPAddress <- data.frame(Domain = character(), IPAddress = character())
+
+# Getting the Domain name and IPAddress and storing in another CSV file
+for (key in names(jsonlite::fromJSON(flat_json))) {
+  tryCatch({
+    strVal = toString(key)
+    if ("infringing_urls" %in% strVal) {
+      domain <- unlist(strsplit(value, "/"))[2]
+      ipAddress <- socket::gethostbyname(domain)
+      CSV_Domain_IPAddress <- rbind(CSV_Domain_IPAddress, data.frame(Domain = domain, IPAddress = ipAddress))
+      
+      if (count == 10000) {
+        break
+      }
+      count = count + 1
+    }
+  }, error = function(e) {
+    print(e)
+  })
+}
+write.csv(CSV_Domain_IPAddress, "CSV_Domain_IPAddress.csv", quote = F)
+
+
+# Getting the CSV data in the dataframe format to do the operations on the data
+df <- read.csv("CSV_Domain_IPAddress.csv")
+
+# Summarization1: Group data by domain and ipaddress the count
+url_distribution <- df %>% group_by(Domain) %>% summarise(IPAddress = n())
+print(url_distribution)
+
+# Plotting the age distribution
+plt <- ggplot(url_distribution, aes(x = Domain, y = IPAddress)) + geom_bar()
+plt <- plt + xlab("Domain") + ylab("IPAddress") + ggtitle("URL Distribution")
+print(plt)
+
+# Summarization 2: Domain Distribution in sample of 100 records
+url_distribution <- df %>% sample_n(100) %>% group_by(Domain) %>% summarise(n = n())
+print(url_distribution)
+
+# Summarization 3: Calculate the frequency of each name
+name_counts <- df %>% count(Domain)
+top_5_names <- name_counts %>% top_n(5)
+print(top_5_names)
+
+
+# Function to convert a JSON object to a DataFrame row
+json_to_dataframe_row <- function(json_obj) {
+  return(as.data.frame(json_obj))
+}
+
+
+# Parallelize the code using at least 4 cpus
+# Number of CPUs to use
+num_cpus <- 4
+
+# print("Before main method")
+if ("__name__" == "__main__") {
+  freeze_support()
+  with(Pool(processes = num_cpus), {
+    dfs <- map(json_to_dataframe_row, flat_json)
+  })
+  df <- do.call(rbind, dfs)
+  print("Inside the main method", df)
+}
